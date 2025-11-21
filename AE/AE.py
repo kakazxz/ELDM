@@ -3,22 +3,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-class AtrousWavelet(nn.Module):
-    """
-    """
-    def __init__(self, in_channels=1):
-        super(AtrousWavelet, self).__init__()
-        self.edge_conv1 = nn.Conv2d(in_channels, 1, kernel_size=3, padding=1)
-        self.edge_conv2 = nn.Conv2d(in_channels, 1, kernel_size=3, padding=2, dilation=2)
-        self.edge_conv3 = nn.Conv2d(in_channels, 1, kernel_size=3, padding=4, dilation=4)
-
+class WaveletEdge(nn.Module):
+    def __init__(self, in_channels=1, out_channels=1, scales=[1, 2, 4]):
+        super().__init__()
+        self.scales = scales
+        self.edge_conv = nn.Parameter(torch.randn(out_channels, in_channels, 3, 3))
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3) / 8.0
+        self.edge_conv.data.copy_(sobel_x)
 
     def forward(self, x):
-        edge_map1 = torch.sigmoid(self.edge_conv1(x)) # e.g., HxW
-        edge_map2 = torch.sigmoid(self.edge_conv2(F.interpolate(x, scale_factor=0.5, mode='bilinear', align_corners=False)))
-        edge_map3 = torch.sigmoid(self.edge_conv3(F.interpolate(x, scale_factor=0.25, mode='bilinear', align_corners=False)))
-        return edge_map1, edge_map2, edge_map3 # Tuple of edge maps
+        edges = []
+        B, C, H, W = x.shape
+        for d in self.scales:
+            pad = d
+            edge_map = F.conv2d(x, self.edge_conv, padding=pad, dilation=d)
+            edge_map = torch.sigmoid(torch.abs(edge_map))
+            edges.append(edge_map)
+        return edges  # List of [B, 1, H, W], same spatial size
 
+class AtrousWavelet(nn.Module):
+    def __init__(self, in_channels=1):
+        super().__init__()
+        self.edge_extractor = DifferentiableWaveletEdge(in_channels=in_channels, scales=[1, 2, 4])
+
+    def forward(self, x):
+        edges = self.edge_extractor(x)
+        return edges[0], edges[1], edges[2]  # (e1, e2, e3)
 
 class Encoder(nn.Module):
 
@@ -229,3 +239,4 @@ if __name__ == '__main__':
 
     # Forward pass
     y_recon, z = model(x)
+
